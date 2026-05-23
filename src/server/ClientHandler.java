@@ -9,18 +9,20 @@ import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
 public class ClientHandler implements Runnable {
 
+    private static final long PING_INTERVAL_MS = 30_000;
+    private static final long PONG_TIMEOUT_MS = 10_000;
+
     private static final AtomicInteger SESSION_COUNTER = new AtomicInteger(1);
     private static final AtomicInteger FILE_COUNTER = new AtomicInteger(103);
 
-    private static final Set<String> ACTIVE_USERS =
-            Collections.synchronizedSet(new HashSet<>());
+    private static final Set<String> ACTIVE_USERS = Collections.synchronizedSet(new HashSet<>());
 
-    private static final List<DrawingFile> SHARED_FILES =
-            Collections.synchronizedList(new ArrayList<>());
+    private static final List<DrawingFile> SHARED_FILES = Collections.synchronizedList(new ArrayList<>());
 
     static {
         SHARED_FILES.add(new DrawingFile(101, "tasarim", 800, 600));
@@ -37,6 +39,10 @@ public class ClientHandler implements Runnable {
 
     private final Set<Integer> openFileIds = new HashSet<>();
 
+    private final AtomicBoolean running = new AtomicBoolean(true);
+    private volatile boolean waitingForPong = false;
+    private volatile long pingSentAt = 0;
+
     public ClientHandler(Socket socket) {
         this.socket = socket;
     }
@@ -45,12 +51,10 @@ public class ClientHandler implements Runnable {
     public void run() {
         try {
             reader = new BufferedReader(
-                    new InputStreamReader(socket.getInputStream(), "UTF-8")
-            );
+                    new InputStreamReader(socket.getInputStream(), "UTF-8"));
 
             writer = new BufferedWriter(
-                    new OutputStreamWriter(socket.getOutputStream(), "UTF-8")
-            );
+                    new OutputStreamWriter(socket.getOutputStream(), "UTF-8"));
 
             handleClient();
 
@@ -84,13 +88,18 @@ public class ClientHandler implements Runnable {
             return;
         }
 
+        startPingThread();
+
         while ((line = reader.readLine()) != null) {
-            System.out.println("[" + username + "] mesaj: " + line);
+            System.out.println("[" + username + "] mesaj: " + line.substring(0, Math.min(120, line.length())));
 
             if (line.equals(MupProtocol.LEAVE)) {
                 System.out.println(username + " ayrıldı.");
                 break;
 
+            } else if (line.equals(MupProtocol.PONG)){
+                handlePong();
+                
             } else if (line.equals(MupProtocol.LIST)) {
                 handleList();
 
@@ -100,13 +109,59 @@ public class ClientHandler implements Runnable {
             } else if (line.startsWith(MupProtocol.OPEN + " ")) {
                 handleOpen(line);
 
+            } else if (line.startsWith(MupProtocol.CLOSE + " ")) {
+                handleClose(line);
+
             } else if (line.startsWith(MupProtocol.DRAW + " ")) {
                 handleDraw(line);
+
+            } else if (line.startsWith(MupProtocol.CUT + " ")) {
+                handleCut(line);
+
+            } else if (line.startsWith(MupProtocol.PASTE + " ")) {
+                handlePaste(line);
 
             } else {
                 sendMessage(MupProtocol.ERR + " 200 Bilinmeyen komut");
             }
         }
+    }
+
+    private void startPingThread() {
+        Thread t = new Thread(() -> {
+            try {
+                while (running.get()) {
+                    Thread.sleep(PING_INTERVAL_MS);
+                    if (!running.get())
+                        break;
+                    waitingForPong = true;
+                    pingSentAt = System.currentTimeMillis();
+                    sendMessage(MupProtocol.PING);
+                    System.out.println("[PING] → " + username);
+                    long deadline = pingSentAt + PONG_TIMEOUT_MS;
+                    while (waitingForPong && System.currentTimeMillis() < deadline) {
+                        Thread.sleep(100);
+                    }
+                    if (waitingForPong) {
+                        System.out.println("[PING] " + username + " PONG göndermedi, bağlantı kesiliyor.");
+                        running.set(false);
+                        closeConnection();
+                        break;
+                    }
+                }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            } catch (IOException e) {
+                // bağlantı zaten kopmuş
+            }
+        });
+        t.setDaemon(true);
+        t.start();
+    }
+
+    private void handlePong() {
+        waitingForPong = false;
+        System.out.println("[PONG] ← " + username + " (" + (System.currentTimeMillis() - pingSentAt) + " ms)");
     }
 
     private void handleJoin(String line) throws IOException {
@@ -219,9 +274,68 @@ public class ClientHandler implements Runnable {
 
     private void handleOpen(String line) throws IOException {
         String[] parts = line.split(" ");
-
         if (parts.length != 2) {
             sendMessage(MupProtocol.ERR + " 201 OPEN kullanımı: OPEN fileId");
+            return;
+        }
+
+        int fileId;
+        try {
+            fileId = Integer.parseInt(parts[1]);
+        } catch (NumberFormatException e) {
+            sendMessage(MupProtocol.ERR + " 201 fileId sayı olmalıdır");
+            return;
+        }
+
+        DrawingFile selectedFile = findFileById(fileId);
+        if (selectedFile == null) {
+            sendMessage(MupProtocol.ERR + " 210 Belirtilen dosya bulunamadı");
+            return;
+        }
+
+        openFileIds.add(fileId);
+
+        // RFC 3.7.3: Diğer kullanıcılara bildir (MUST)
+        broadcastToFileEditors(selectedFile, MupProtocol.USER_JOINED_FILE + " " + fileId + " " + username);
+        selectedFile.addEditor(this);
+
+        sendMessage(MupProtocol.OPENED + " " + fileId + " 0");
+        List<String> oldOperations = selectedFile.getOperationsCopy();
+        sendMessage(MupProtocol.STATE_BEGIN + " " + fileId + " " + oldOperations.size());
+        for (String operation : oldOperations) {
+            sendMessage(MupProtocol.STATE_OP + " " + fileId + " " + operation);
+        }
+        sendMessage(MupProtocol.STATE_END + " " + fileId);
+    }
+
+    private void handleClose(String line) throws IOException {
+        String[] parts = line.split(" ");
+        if (parts.length != 2) {
+            sendMessage(MupProtocol.ERR + " 201 CLOSE kullanımı: CLOSE fileId");
+            return;
+        }
+
+        int fileId;
+        try {
+            fileId = Integer.parseInt(parts[1]);
+        } catch (NumberFormatException e) {
+            return;
+        }
+
+        DrawingFile file = findFileById(fileId);
+        if (file != null) {
+            file.removeEditor(this);
+            // RFC 3.7.4: Diğer kullanıcılara ayrıldığını bildir
+            broadcastToFileEditors(file, MupProtocol.USER_LEFT_FILE + " " + fileId + " " + username);
+        }
+        openFileIds.remove(fileId);
+    }
+
+    private void handleDraw(String line) throws IOException {
+        String[] parts = line.split(" ");
+
+        if (parts.length < 4) {
+            sendMessage(MupProtocol.ERR + " 201 DRAW formatı hatalı");
             return;
         }
 
@@ -234,6 +348,11 @@ public class ClientHandler implements Runnable {
             return;
         }
 
+        if (!openFileIds.contains(fileId)) {
+            sendMessage(MupProtocol.ERR + " 211 Dosya açık değil");
+            return;
+        }
+
         DrawingFile selectedFile = findFileById(fileId);
 
         if (selectedFile == null) {
@@ -241,69 +360,118 @@ public class ClientHandler implements Runnable {
             return;
         }
 
-        openFileIds.add(fileId);
-        selectedFile.addEditor(this);
+        String tool = parts[2];
 
-        sendMessage(MupProtocol.OPENED + " " + fileId + " 0");
-
-        List<String> oldOperations = selectedFile.getOperationsCopy();
-
-        sendMessage(MupProtocol.STATE_BEGIN + " " + fileId + " " + oldOperations.size());
-
-        for (String operation : oldOperations) {
-            sendMessage(MupProtocol.STATE_OP + " " + fileId + " " + operation);
+        if (!isSupportedTool(tool)) {
+            sendMessage(MupProtocol.ERR + " 201 Desteklenmeyen çizim aracı");
+            return;
         }
 
-        sendMessage(MupProtocol.STATE_END + " " + fileId);
+        String args = getArgsAfterTool(parts);
 
-        System.out.println(username + " dosyayı açtı: "
-                + selectedFile.getId() + " | " + selectedFile.getName());
+        String broadcastMessage = selectedFile.createDrawBroadcast(username, tool, args);
+
+        broadcastToFileEditors(selectedFile, broadcastMessage);
+
+        System.out.println("Çizim olayı yayınlandı: " + broadcastMessage);
+        checkAutoSave(selectedFile);
     }
 
-private void handleDraw(String line) throws IOException {
-    String[] parts = line.split(" ");
+    // ----------------------------------------------------------------
+    // CUT
+    // CUT <fileId> <x> <y> <w> <h>
+    // ----------------------------------------------------------------
 
-    if (parts.length < 4) {
-        sendMessage(MupProtocol.ERR + " 201 DRAW formatı hatalı");
-        return;
+    private void handleCut(String line) throws IOException {
+        String[] parts = line.split(" ");
+        if (parts.length != 6) {
+            sendMessage(MupProtocol.ERR + " 201 CUT kullanımı: CUT fileId x y w h");
+            return;
+        }
+
+        int fileId, x, y, w, h;
+        try {
+            fileId = Integer.parseInt(parts[1]);
+            x = Integer.parseInt(parts[2]);
+            y = Integer.parseInt(parts[3]);
+            w = Integer.parseInt(parts[4]);
+            h = Integer.parseInt(parts[5]);
+        } catch (NumberFormatException e) {
+            sendMessage(MupProtocol.ERR + " 201 CUT argümanları sayı olmalı");
+            return;
+        }
+
+        if (!openFileIds.contains(fileId)) {
+            sendMessage(MupProtocol.ERR + " 211 Dosya açık değil");
+            return;
+        }
+        DrawingFile file = findFileById(fileId);
+        if (file == null) {
+            sendMessage(MupProtocol.ERR + " 210 Dosya bulunamadı");
+            return;
+        }
+
+        String bcast = file.createCutBroadcast(username, x, y, w, h);
+        broadcastToFileEditors(file, bcast);
+        checkAutoSave(file); // Auto-save kontrolü
     }
 
-    int fileId;
+    // ----------------------------------------------------------------
+    // PASTE
+    // PASTE <fileId> <x> <y> <w> <h> <pixels>
+    // pixels = virgülle ayrılmış w*h adet HEX6 değeri
+    // ----------------------------------------------------------------
 
-    try {
-        fileId = Integer.parseInt(parts[1]);
-    } catch (NumberFormatException e) {
-        sendMessage(MupProtocol.ERR + " 201 fileId sayı olmalıdır");
-        return;
+    private void handlePaste(String line) throws IOException {
+        // PASTE <fileId> <x> <y> <w> <h> <pxCount> <hex1> ... <hexN>
+        String[] parts = line.split(" ", 8);
+        if (parts.length != 8) {
+            sendMessage(MupProtocol.ERR + " 201 PASTE formatı hatalı");
+            return;
+        }
+
+        int fileId, x, y, w, h, pxCount;
+        try {
+            fileId = Integer.parseInt(parts[1]);
+            x = Integer.parseInt(parts[2]);
+            y = Integer.parseInt(parts[3]);
+            w = Integer.parseInt(parts[4]);
+            h = Integer.parseInt(parts[5]);
+            pxCount = Integer.parseInt(parts[6]);
+        } catch (NumberFormatException e) {
+            sendMessage(MupProtocol.ERR + " 201 PASTE argümanları sayı olmalı");
+            return;
+        }
+
+        if (!openFileIds.contains(fileId)) {
+            sendMessage(MupProtocol.ERR + " 211 Dosya açık değil");
+            return;
+        }
+        DrawingFile file = findFileById(fileId);
+        if (file == null) {
+            sendMessage(MupProtocol.ERR + " 210 Dosya bulunamadı");
+            return;
+        }
+
+        // MUST-21 Kuralı
+        if (pxCount != w * h) {
+            sendMessage(MupProtocol.ERR + " 201 PASTE pxCount w*h değerine eşit olmalıdır");
+            return;
+        }
+
+        String pixelData = parts[7];
+        String bcast = file.createPasteBroadcast(username, x, y, w, h, pixelData);
+        broadcastToFileEditors(file, bcast);
+        checkAutoSave(file); // Auto-save kontrolü
     }
 
-    if (!openFileIds.contains(fileId)) {
-        sendMessage(MupProtocol.ERR + " 211 Dosya açık değil");
-        return;
+    // RFC MUST-14 Otomatik kayıt tetikleyici
+    private void checkAutoSave(DrawingFile file) {
+        if (file.checkAndResetAutoSave()) {
+            long timestamp = System.currentTimeMillis() / 1000;
+            broadcastToFileEditors(file, MupProtocol.SAVE_ACK + " " + file.getId() + " " + timestamp);
+        }
     }
-
-    DrawingFile selectedFile = findFileById(fileId);
-
-    if (selectedFile == null) {
-        sendMessage(MupProtocol.ERR + " 210 Belirtilen dosya bulunamadı");
-        return;
-    }
-
-    String tool = parts[2];
-
-    if (!isSupportedTool(tool)) {
-        sendMessage(MupProtocol.ERR + " 201 Desteklenmeyen çizim aracı");
-        return;
-    }
-
-    String args = getArgsAfterTool(parts);
-
-    String broadcastMessage = selectedFile.createDrawBroadcast(username, tool, args);
-
-    broadcastToFileEditors(selectedFile, broadcastMessage);
-
-    System.out.println("Çizim olayı yayınlandı: " + broadcastMessage);
-}
 
     private boolean isSupportedTool(String tool) {
         return tool.equals("LINE")
@@ -353,7 +521,14 @@ private void handleDraw(String line) throws IOException {
     private void removeFromOpenFiles() {
         synchronized (SHARED_FILES) {
             for (DrawingFile file : SHARED_FILES) {
-                file.removeEditor(this);
+                // Eğer bu kullanıcı dosyanın içindeyse, onu sil ve diğerlerine haber ver
+                if (file.getEditorsCopy().contains(this)) {
+                    file.removeEditor(this);
+                    // MUST-20 Kuralı: Bağlantı kopsa bile kalanlara bildirim gitmeli
+                    if (username != null) {
+                        broadcastToFileEditors(file, MupProtocol.USER_LEFT_FILE + " " + file.getId() + " " + username);
+                    }
+                }
             }
         }
     }

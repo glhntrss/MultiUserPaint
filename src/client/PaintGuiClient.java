@@ -3,14 +3,10 @@ package client;
 import protocol.MupProtocol;
 
 import javax.swing.*;
-import java.awt.BorderLayout;
-import java.awt.Color;
-import java.awt.Dimension;
-import java.awt.FlowLayout;
-import java.awt.GridLayout;
-import java.awt.Point;
+import java.awt.*;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
+import java.awt.image.BufferedImage;
 import java.io.*;
 import java.net.Socket;
 
@@ -28,7 +24,6 @@ public class PaintGuiClient extends JFrame {
 
     private final DefaultListModel<FileItem> fileListModel = new DefaultListModel<>();
     private final JList<FileItem> fileList = new JList<>(fileListModel);
-
     private final CanvasPanel canvasPanel = new CanvasPanel();
 
     private final JLabel connectionLabel = new JLabel("Bağlantı yok");
@@ -36,30 +31,35 @@ public class PaintGuiClient extends JFrame {
 
     private Color selectedColor = Color.BLACK;
     private int selectedThickness = 3;
-    private String selectedTool = "LINE";
+    private String selectedTool = "LINE"; // LINE | ERASE | SELECT
 
     private Point lastPoint = null;
 
+    // Pano: CUT veya COPY ile alınan görüntü
+    private ClipboardData clipboard = null;
+
+    // ----------------------------------------------------------------
     public static void main(String[] args) {
-        SwingUtilities.invokeLater(() -> {
-            PaintGuiClient client = new PaintGuiClient();
-            client.setVisible(true);
-        });
+        SwingUtilities.invokeLater(() -> new PaintGuiClient().setVisible(true));
     }
 
     public PaintGuiClient() {
         setTitle("MUP Multi-User Paint Client");
-        setSize(1000, 700);
+        setSize(1100, 750);
         setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
         setLocationRelativeTo(null);
-
         buildInterface();
         askUsernameAndConnect();
     }
 
+    // ----------------------------------------------------------------
+    // Arayüz kurulumu
+    // ----------------------------------------------------------------
+
     private void buildInterface() {
         setLayout(new BorderLayout());
 
+        // --- Üst panel ---
         JPanel topPanel = new JPanel(new FlowLayout(FlowLayout.LEFT));
 
         JButton listButton = new JButton("Dosya Listesi");
@@ -68,95 +68,151 @@ public class PaintGuiClient extends JFrame {
         JButton colorButton = new JButton("Renk Seç");
         JButton clearButton = new JButton("Ekranı Temizle");
 
-        String[] toolOptions = {"Kalem", "Silgi"};
+        // CKY butonları
+        JButton cutButton = new JButton("Kes (Ctrl+X)");
+        JButton copyButton = new JButton("Kopyala (Ctrl+C)");
+        JButton pasteButton = new JButton("Yapıştır (Ctrl+V)");
+
+        String[] toolOptions = { "Kalem", "Silgi", "Seçim" };
         JComboBox<String> toolCombo = new JComboBox<>(toolOptions);
 
-        String[] thicknessOptions = {"1", "2", "3", "5", "8", "12"};
+        String[] thicknessOptions = { "1", "2", "3", "5", "8", "12" };
         JComboBox<String> thicknessCombo = new JComboBox<>(thicknessOptions);
         thicknessCombo.setSelectedItem("3");
 
         topPanel.add(listButton);
         topPanel.add(createButton);
         topPanel.add(openButton);
+        topPanel.add(new JSeparator(SwingConstants.VERTICAL));
         topPanel.add(new JLabel("Araç:"));
         topPanel.add(toolCombo);
         topPanel.add(colorButton);
         topPanel.add(new JLabel("Kalınlık:"));
         topPanel.add(thicknessCombo);
         topPanel.add(clearButton);
+        topPanel.add(new JSeparator(SwingConstants.VERTICAL));
+        topPanel.add(cutButton);
+        topPanel.add(copyButton);
+        topPanel.add(pasteButton);
         topPanel.add(connectionLabel);
         topPanel.add(activeFileLabel);
-
         add(topPanel, BorderLayout.NORTH);
 
+        // --- Sol panel: dosya listesi ---
         JPanel leftPanel = new JPanel(new BorderLayout());
         leftPanel.setPreferredSize(new Dimension(220, 0));
         leftPanel.add(new JLabel("Paylaşılan Dosyalar"), BorderLayout.NORTH);
         leftPanel.add(new JScrollPane(fileList), BorderLayout.CENTER);
-
         add(leftPanel, BorderLayout.WEST);
 
+        // --- Merkez: tuval ---
         add(canvasPanel, BorderLayout.CENTER);
 
+        // --- Alt bilgi ---
         JTextArea infoArea = new JTextArea();
         infoArea.setEditable(false);
-        infoArea.setRows(4);
+        infoArea.setRows(3);
         infoArea.setText(
-                "Kullanım:\n" +
-                "1) Dosya Listesi butonuna bas.\n" +
-                "2) Bir dosya seçip Dosya Aç'a bas.\n" +
-                "3) Tuval üzerinde mouse ile çizim yap.\n"
-        );
+                "Kullanım: 1) Dosya Listesi → Dosya Aç  2) Kalem ile çizim yap\n" +
+                        "Kes/Kopyala: 'Seçim' aracını seç → sürükle → Kes veya Kopyala\n" +
+                        "Yapıştır: Kopyaladıktan sonra Yapıştır'a bas, tuvalde tıklayarak konumlandır");
         add(new JScrollPane(infoArea), BorderLayout.SOUTH);
 
+        // --- Buton olayları ---
         listButton.addActionListener(e -> sendListRequest());
         createButton.addActionListener(e -> createFile());
         openButton.addActionListener(e -> openSelectedFile());
+        clearButton.addActionListener(e -> canvasPanel.clearCanvas());
 
         colorButton.addActionListener(e -> {
-            Color newColor = JColorChooser.showDialog(this, "Renk Seç", selectedColor);
-            if (newColor != null) {
-                selectedColor = newColor;
-            }
+            Color c = JColorChooser.showDialog(this, "Renk Seç", selectedColor);
+            if (c != null)
+                selectedColor = c;
         });
 
         toolCombo.addActionListener(e -> {
-            String selected = (String) toolCombo.getSelectedItem();
+            String sel = (String) toolCombo.getSelectedItem();
+            if ("Silgi".equals(sel))
+                selectedTool = "ERASE";
+            else if ("Seçim".equals(sel))
+                selectedTool = "SELECT";
+            else
+                selectedTool = "LINE";
 
-            if ("Silgi".equals(selected)) {
-                    selectedTool = "ERASE";
-                } else {
-                    selectedTool = "LINE";
-                }
-            });
-
-        thicknessCombo.addActionListener(e -> {
-            String value = (String) thicknessCombo.getSelectedItem();
-            selectedThickness = Integer.parseInt(value);
+            // Seçim aracı dışına geçince seçimi temizle
+            if (!"SELECT".equals(selectedTool))
+                canvasPanel.clearSelection();
         });
 
-        clearButton.addActionListener(e -> canvasPanel.clearCanvas());
+        thicknessCombo.addActionListener(e -> {
+            selectedThickness = Integer.parseInt((String) thicknessCombo.getSelectedItem());
+        });
 
+        cutButton.addActionListener(e -> handleCut());
+        copyButton.addActionListener(e -> handleCopy());
+        pasteButton.addActionListener(e -> handlePaste());
+
+        // Klavye kısayolları
+        getRootPane().getInputMap(JComponent.WHEN_IN_FOCUSED_WINDOW)
+                .put(KeyStroke.getKeyStroke("ctrl X"), "cut");
+        getRootPane().getInputMap(JComponent.WHEN_IN_FOCUSED_WINDOW)
+                .put(KeyStroke.getKeyStroke("ctrl C"), "copy");
+        getRootPane().getInputMap(JComponent.WHEN_IN_FOCUSED_WINDOW)
+                .put(KeyStroke.getKeyStroke("ctrl V"), "paste");
+        getRootPane().getActionMap().put("cut", new AbstractAction() {
+            public void actionPerformed(java.awt.event.ActionEvent e) {
+                handleCut();
+            }
+        });
+        getRootPane().getActionMap().put("copy", new AbstractAction() {
+            public void actionPerformed(java.awt.event.ActionEvent e) {
+                handleCopy();
+            }
+        });
+        getRootPane().getActionMap().put("paste", new AbstractAction() {
+            public void actionPerformed(java.awt.event.ActionEvent e) {
+                handlePaste();
+            }
+        });
+
+        // --- Tuval fare olayları ---
         canvasPanel.addMouseListener(new MouseAdapter() {
             @Override
             public void mousePressed(MouseEvent e) {
-                lastPoint = e.getPoint();
+                if ("SELECT".equals(selectedTool)) {
+                    // Yapıştır önizlemesi aktifse tıklama = yapıştırma konumunu onayla
+                    if (canvasPanel.hasPastePreview()) {
+                        confirmPaste(e.getX(), e.getY());
+                        return;
+                    }
+                    canvasPanel.startSelection(e.getX(), e.getY());
+                } else {
+                    lastPoint = e.getPoint();
+                }
             }
 
             @Override
             public void mouseReleased(MouseEvent e) {
-                lastPoint = null;
+                if (!"SELECT".equals(selectedTool)) {
+                    lastPoint = null;
+                }
             }
         });
 
         canvasPanel.addMouseMotionListener(new MouseAdapter() {
             @Override
             public void mouseDragged(MouseEvent e) {
+                if ("SELECT".equals(selectedTool)) {
+                    if (canvasPanel.hasPastePreview()) {
+                        canvasPanel.movePastePreview(e.getX(), e.getY());
+                    } else {
+                        canvasPanel.updateSelection(e.getX(), e.getY());
+                    }
+                    return;
+                }
+
                 if (activeFileId == null) {
-                    JOptionPane.showMessageDialog(
-                            PaintGuiClient.this,
-                            "Önce bir dosya açmalısın."
-                    );
+                    JOptionPane.showMessageDialog(PaintGuiClient.this, "Önce bir dosya aç.");
                     return;
                 }
 
@@ -164,103 +220,138 @@ public class PaintGuiClient extends JFrame {
                     lastPoint = e.getPoint();
                     return;
                 }
+                Point cur = e.getPoint();
+                sendDrawLine(activeFileId, lastPoint.x, lastPoint.y, cur.x, cur.y);
+                lastPoint = cur;
+            }
 
-                Point currentPoint = e.getPoint();
-
-                sendDrawLine(
-                        activeFileId,
-                        lastPoint.x,
-                        lastPoint.y,
-                        currentPoint.x,
-                        currentPoint.y
-                );
-
-                lastPoint = currentPoint;
+            @Override
+            public void mouseMoved(MouseEvent e) {
+                // Paste önizlemesi farenin altında hareket etsin
+                if (canvasPanel.hasPastePreview()) {
+                    canvasPanel.movePastePreview(e.getX(), e.getY());
+                }
             }
         });
     }
 
-    private void askUsernameAndConnect() {
-        username = JOptionPane.showInputDialog(
-                this,
-                "Kullanıcı adınızı girin:",
-                "MUP Bağlantı",
-                JOptionPane.PLAIN_MESSAGE
-        );
+    // ----------------------------------------------------------------
+    // Kes-Kopyala-Yapıştır işlemleri
+    // ----------------------------------------------------------------
 
-        if (username == null || username.trim().isEmpty()) {
-            JOptionPane.showMessageDialog(this, "Kullanıcı adı boş olamaz.");
-            System.exit(0);
+    private void handleCut() {
+        if (activeFileId == null) {
+            JOptionPane.showMessageDialog(this, "Önce bir dosya aç.");
+            return;
+        }
+        Rectangle sel = canvasPanel.getSelectionRect();
+        if (sel == null || sel.width == 0 || sel.height == 0) {
+            JOptionPane.showMessageDialog(this, "Önce 'Seçim' aracıyla bir alan seç.");
+            return;
         }
 
-        username = username.trim();
+        // Görüntüyü yerel olarak al
+        BufferedImage captured = canvasPanel.captureRegion(sel.x, sel.y, sel.width, sel.height);
+        if (captured == null)
+            return;
 
-        try {
-            socket = new Socket(SERVER_HOST, SERVER_PORT);
+        clipboard = new ClipboardData(ClipboardData.Operation.CUT,
+                captured, sel.x, sel.y, sel.width, sel.height);
 
-            reader = new BufferedReader(
-                    new InputStreamReader(socket.getInputStream(), "UTF-8")
-            );
+        // Sunucuya CUT bildir: CUT <fileId> <x> <y> <w> <h>
+        send(MupProtocol.CUT + " " + activeFileId
+                + " " + sel.x + " " + sel.y
+                + " " + sel.width + " " + sel.height);
 
-            writer = new BufferedWriter(
-                    new OutputStreamWriter(socket.getOutputStream(), "UTF-8")
-            );
-
-            send(MupProtocol.JOIN + " " + username);
-
-            String response = reader.readLine();
-
-            if (response == null) {
-                JOptionPane.showMessageDialog(this, "Server yanıt vermedi.");
-                System.exit(0);
-            }
-
-            if (response.startsWith(MupProtocol.WELCOME)) {
-                connectionLabel.setText("Bağlandı: " + username);
-                startListenerThread();
-                sendListRequest();
-
-            } else if (response.startsWith(MupProtocol.REJECT)) {
-                JOptionPane.showMessageDialog(this, "Bağlantı reddedildi: " + response);
-                System.exit(0);
-
-            } else {
-                JOptionPane.showMessageDialog(this, "Beklenmeyen yanıt: " + response);
-                System.exit(0);
-            }
-
-        } catch (IOException e) {
-            JOptionPane.showMessageDialog(this, "Server'a bağlanılamadı: " + e.getMessage());
-            System.exit(0);
-        }
+        canvasPanel.clearSelection();
     }
 
-    private void startListenerThread() {
-        Thread listenerThread = new Thread(() -> {
-            try {
-                String line;
+    private void handleCopy() {
+        if (activeFileId == null || canvasPanel.getSelectionRect() == null)
+            return;
+        Rectangle sel = canvasPanel.getSelectionRect();
+        BufferedImage captured = canvasPanel.captureRegion(sel.x, sel.y, sel.width, sel.height);
+        if (captured == null)
+            return;
 
-                while ((line = reader.readLine()) != null) {
-                    String message = line;
-                    SwingUtilities.invokeLater(() -> handleServerMessage(message));
+        clipboard = new ClipboardData(ClipboardData.Operation.COPY, captured, sel.x, sel.y, sel.width, sel.height);
+
+        // DİKKAT: RFC'ye göre COPY sadece yereldir. Sunucuya bir şey GÖNDERİLMEZ.
+        canvasPanel.clearSelection();
+        JOptionPane.showMessageDialog(this, "Kopyalandı (" + sel.width + "x" + sel.height
+                + " px).\n'Yapıştır' butonuna bas, ardından tuvalde konumlandır.");
+    }
+
+    private void handlePaste() {
+        if (clipboard == null) {
+            JOptionPane.showMessageDialog(this, "Panoda kopyalanmış içerik yok.");
+            return;
+        }
+        if (activeFileId == null) {
+            JOptionPane.showMessageDialog(this, "Önce bir dosya aç.");
+            return;
+        }
+
+        // Seçim aracına geç ve paste önizlemesini göster
+        selectedTool = "SELECT";
+        canvasPanel.showPastePreview(clipboard.getImage(), 0, 0);
+        JOptionPane.showMessageDialog(this, "Tuvale tıklayarak yapıştır konumunu seç.");
+    }
+
+    // RFC MUST-22: 4096 Bayt sınırına takılmamak için PASTE işlemini satır satır
+    // bölüyoruz.
+    private void confirmPaste(int x, int y) {
+        if (clipboard == null || activeFileId == null)
+            return;
+        BufferedImage img = clipboard.getImage();
+        int w = img.getWidth();
+        int h = img.getHeight();
+
+        // Her piksel için 6 karakter (HEX6) + 1 boşluk = 7 karakter
+        // Güvenli bölge olarak her mesajda en fazla 400 piksel gönderiyoruz.
+        int maxPxPerMessage = 400;
+
+        for (int py = 0; py < h; py++) {
+            for (int px = 0; px < w; px += maxPxPerMessage) {
+                int chunkW = Math.min(maxPxPerMessage, w - px);
+                StringBuilder pixels = new StringBuilder();
+
+                for (int i = 0; i < chunkW; i++) {
+                    int rgb = img.getRGB(px + i, py) & 0xFFFFFF;
+                    pixels.append(String.format("%06X", rgb));
+                    if (i < chunkW - 1)
+                        pixels.append(" "); // RFC MUST-3'e göre boşlukla ayrılır
                 }
 
-            } catch (IOException e) {
-                SwingUtilities.invokeLater(() ->
-                        connectionLabel.setText("Bağlantı koptu")
-                );
+                // Format: PASTE <fileId> <x> <y> <w> <h> <pxCount> <hex1> ... <hexN>
+                send(MupProtocol.PASTE + " " + activeFileId + " " + (x + px) + " " + (y + py)
+                        + " " + chunkW + " 1 " + chunkW + " " + pixels.toString());
             }
-        });
-
-        listenerThread.setDaemon(true);
-        listenerThread.start();
+        }
+        canvasPanel.clearPastePreview();
     }
+
+    // ----------------------------------------------------------------
+    // Sunucu mesajlarını işle
+    // ----------------------------------------------------------------
 
     private void handleServerMessage(String message) {
         System.out.println("[SERVER] " + message);
 
         if (message.startsWith(MupProtocol.FILES)) {
             updateFileList(message);
+
+        } else if (message.equals(MupProtocol.PING)){
+            send(MupProtocol.PONG);
+
+        } else if (message.startsWith(MupProtocol.REGION_BCAST)) {
+            handleRegionBroadcast(message);
+
+        } else if (message.startsWith(MupProtocol.SAVE_ACK)) {
+            System.out.println("Dosya otomatik olarak kaydedildi.");
+
+        } else if (message.startsWith(MupProtocol.USER_JOINED_FILE) || message.startsWith(MupProtocol.USER_LEFT_FILE)) {
+            System.out.println("Sistem Bildirimi: " + message);
 
         } else if (message.startsWith(MupProtocol.CREATED)) {
             JOptionPane.showMessageDialog(this, "Yeni dosya oluşturuldu.");
@@ -286,85 +377,124 @@ public class PaintGuiClient extends JFrame {
         }
     }
 
+    // ----------------------------------------------------------------
+    // CKY broadcast işleyicileri
+    // ----------------------------------------------------------------
+
+    // /**
+    //  * CUT_BCAST <fileId> <opId> <author> <x> <y> <w> <h>
+    //  * Kesilen bölgeyi tüm editörlerin ekranında beyaz ile doldurur.
+    //  */
+    // private void handleCutBroadcast(String message) {
+    //     String[] p = message.split(" ");
+    //     if (p.length < 8)
+    //         return;
+    //     try {
+    //         int x = Integer.parseInt(p[4]);
+    //         int y = Integer.parseInt(p[5]);
+    //         int w = Integer.parseInt(p[6]);
+    //         int h = Integer.parseInt(p[7]);
+    //         canvasPanel.eraseRegion(x, y, w, h);
+    //     } catch (NumberFormatException e) {
+    //         System.out.println("CUT_BCAST parse hatası: " + message);
+    //     }
+    // }
+
+    // /**
+    //  * PASTE_BCAST <fileId> <opId> <author> <x> <y> <w> <h> <pixels>
+    //  * pixels = virgülle ayrılmış HEX6 değerlerinin listesi (w*h adet)
+    //  */
+    // private void handlePasteBroadcast(String message) {
+    //     // Son alan (pixels) boşluk içerebilir; 8. alandan itibari hepsini al
+    //     String[] p = message.split(" ", 9);
+    //     if (p.length < 9)
+    //         return;
+    //     try {
+    //         int x = Integer.parseInt(p[4]);
+    //         int y = Integer.parseInt(p[5]);
+    //         int w = Integer.parseInt(p[6]);
+    //         int h = Integer.parseInt(p[7]);
+    //         String pixelData = p[8];
+
+    //         String[] hexValues = pixelData.split(",");
+    //         if (hexValues.length != w * h) {
+    //             System.out.println("PASTE_BCAST piksel sayısı uyumsuz.");
+    //             return;
+    //         }
+
+    //         BufferedImage img = new BufferedImage(w, h, BufferedImage.TYPE_INT_ARGB);
+    //         for (int py = 0; py < h; py++) {
+    //             for (int px = 0; px < w; px++) {
+    //                 int rgb = (int) Long.parseLong(hexValues[py * w + px], 16);
+    //                 img.setRGB(px, py, 0xFF000000 | rgb);
+    //             }
+    //         }
+
+    //         canvasPanel.applyPaste(img, x, y);
+
+    //     } catch (Exception e) {
+    //         System.out.println("PASTE_BCAST parse hatası: " + e.getMessage());
+    //     }
+    // }
+
+    // ----------------------------------------------------------------
+    // Diğer server mesaj işleyicileri (orijinalden korundu)
+    // ----------------------------------------------------------------
+
     private void updateFileList(String message) {
         fileListModel.clear();
-
         String[] parts = message.split(" ");
-
-        if (parts.length < 2) {
+        if (parts.length < 2)
             return;
-        }
-
         int count;
-
         try {
             count = Integer.parseInt(parts[1]);
         } catch (NumberFormatException e) {
             return;
         }
-
         int index = 2;
-
         for (int i = 0; i < count; i++) {
-            if (index + 1 >= parts.length) {
+            if (index + 1 >= parts.length)
                 return;
-            }
-
             int fileId = Integer.parseInt(parts[index]);
             String fileName = parts[index + 1];
-
             fileListModel.addElement(new FileItem(fileId, fileName));
-
             index += 2;
         }
     }
 
     private void createFile() {
         JPanel panel = new JPanel(new GridLayout(3, 2));
-
         JTextField nameField = new JTextField("deneme");
         JTextField widthField = new JTextField("800");
         JTextField heightField = new JTextField("600");
-
         panel.add(new JLabel("Dosya adı:"));
         panel.add(nameField);
-
         panel.add(new JLabel("Genişlik:"));
         panel.add(widthField);
-
         panel.add(new JLabel("Yükseklik:"));
         panel.add(heightField);
-
-        int result = JOptionPane.showConfirmDialog(
-                this,
-                panel,
-                "Yeni Dosya Oluştur",
-                JOptionPane.OK_CANCEL_OPTION
-        );
-
+        int result = JOptionPane.showConfirmDialog(this, panel, "Yeni Dosya Oluştur",
+                JOptionPane.OK_CANCEL_OPTION);
         if (result == JOptionPane.OK_OPTION) {
-            String fileName = nameField.getText().trim();
-            String width = widthField.getText().trim();
-            String height = heightField.getText().trim();
-
-            send(MupProtocol.CREATE + " " + fileName + " " + width + " " + height);
+            send(MupProtocol.CREATE + " "
+                    + nameField.getText().trim() + " "
+                    + widthField.getText().trim() + " "
+                    + heightField.getText().trim());
         }
     }
 
     private void openSelectedFile() {
-        FileItem selectedFile = fileList.getSelectedValue();
-
-        if (selectedFile == null) {
-            JOptionPane.showMessageDialog(this, "Önce listeden bir dosya seç.");
+        FileItem sel = fileList.getSelectedValue();
+        if (sel == null) {
+            JOptionPane.showMessageDialog(this, "Listeden bir dosya seç.");
             return;
         }
-
-        send(MupProtocol.OPEN + " " + selectedFile.getId());
+        send(MupProtocol.OPEN + " " + sel.getId());
     }
 
     private void handleOpened(String message) {
         String[] parts = message.split(" ");
-
         if (parts.length >= 2) {
             activeFileId = Integer.parseInt(parts[1]);
             activeFileLabel.setText("Aktif dosya: " + activeFileId);
@@ -373,140 +503,185 @@ public class PaintGuiClient extends JFrame {
     }
 
     private void handleStateOp(String message) {
-       
-
         String[] parts = message.split(" ", 3);
-
-        if (parts.length < 3) {
+        if (parts.length < 3)
             return;
-        }
-
-        String embeddedOperation = parts[2];
-
-        if (embeddedOperation.startsWith(MupProtocol.DRAW_BCAST)) {
-            handleDrawBroadcast(embeddedOperation);
+        String embedded = parts[2];
+        if (embedded.startsWith(MupProtocol.DRAW_BCAST)) {
+            handleDrawBroadcast(embedded);
+        } else if (embedded.startsWith(MupProtocol.REGION_BCAST)) {
+            handleRegionBroadcast(embedded);
         }
     }
 
-private void handleDrawBroadcast(String message) {
-    // LINE format:
-    // DRAW_BCAST fileId opId author LINE x1 y1 x2 y2 color thickness
-    //
-    // ERASE format:
-    // DRAW_BCAST fileId opId author ERASE x1 y1 x2 y2 thickness
+    // RFC Madde 3.8.5'e tam uyumlu REGION_BCAST ayrıştırıcısı
+    private void handleRegionBroadcast(String message) {
+        // Hata buradaydı: split limitini 9'dan 10'a çıkardık
+        String[] p = message.split(" ", 10);
+        if (p.length < 8) return;
+        
+        try {
+            String subCmd = p[4]; // CUT veya PASTE
+            int x = Integer.parseInt(p[5]);
+            int y = Integer.parseInt(p[6]);
+            int w = Integer.parseInt(p[7]);
+            int h = Integer.parseInt(p[8]);
 
-    String[] parts = message.split(" ");
-
-    if (parts.length < 10) {
-        return;
-    }
-
-    String tool = parts[4];
-
-    try {
-        if (tool.equals("LINE")) {
-            if (parts.length < 11) {
-                return;
+            if ("CUT".equals(subCmd)) {
+                canvasPanel.eraseRegion(x, y, w, h);
+            } else if ("PASTE".equals(subCmd)) {
+                if (p.length < 10) return; // Pixel verisi eksikse dön
+                
+                String pixelData = p[9]; // Pikseller artık tam olarak 9. index'te
+                String[] hexValues = pixelData.split(" ");
+                
+                BufferedImage img = new BufferedImage(w, h, BufferedImage.TYPE_INT_ARGB);
+                for (int py = 0; py < h; py++) {
+                    for (int px = 0; px < w; px++) {
+                        // Olası bir parse hatasını engellemek için sınır kontrolü
+                        if (py * w + px >= hexValues.length) break; 
+                        
+                        int rgb = (int) Long.parseLong(hexValues[py * w + px], 16);
+                        img.setRGB(px, py, 0xFF000000 | rgb);
+                    }
+                }
+                canvasPanel.applyPaste(img, x, y);
             }
-
-            int x1 = Integer.parseInt(parts[5]);
-            int y1 = Integer.parseInt(parts[6]);
-            int x2 = Integer.parseInt(parts[7]);
-            int y2 = Integer.parseInt(parts[8]);
-
-            Color color = Color.decode("#" + parts[9]);
-            int thickness = Integer.parseInt(parts[10]);
-
-            DrawCommand command = new DrawCommand(x1, y1, x2, y2, color, thickness);
-            canvasPanel.addDrawCommand(command);
-
-        } else if (tool.equals("ERASE")) {
-            int x1 = Integer.parseInt(parts[5]);
-            int y1 = Integer.parseInt(parts[6]);
-            int x2 = Integer.parseInt(parts[7]);
-            int y2 = Integer.parseInt(parts[8]);
-
-            int thickness = Integer.parseInt(parts[9]);
-
-            DrawCommand command = new DrawCommand(
-                    x1,
-                    y1,
-                    x2,
-                    y2,
-                    Color.WHITE,
-                    thickness
-            );
-
-            canvasPanel.addDrawCommand(command);
+        } catch (Exception e) {
+            System.out.println("REGION_BCAST parse hatası: " + e.getMessage());
         }
-
-    } catch (Exception e) {
-        System.out.println("DRAW_BCAST parse edilemedi: " + message);
     }
-}
+
+    private void handleDrawBroadcast(String message) {
+        String[] parts = message.split(" ");
+        if (parts.length < 10)
+            return;
+        String tool = parts[4];
+        try {
+            if ("LINE".equals(tool)) {
+                if (parts.length < 11)
+                    return;
+                int x1 = Integer.parseInt(parts[5]);
+                int y1 = Integer.parseInt(parts[6]);
+                int x2 = Integer.parseInt(parts[7]);
+                int y2 = Integer.parseInt(parts[8]);
+                Color color = Color.decode("#" + parts[9]);
+                int thickness = Integer.parseInt(parts[10]);
+                canvasPanel.addDrawCommand(new DrawCommand(x1, y1, x2, y2, color, thickness));
+
+            } else if ("ERASE".equals(tool)) {
+                int x1 = Integer.parseInt(parts[5]);
+                int y1 = Integer.parseInt(parts[6]);
+                int x2 = Integer.parseInt(parts[7]);
+                int y2 = Integer.parseInt(parts[8]);
+                int thickness = Integer.parseInt(parts[9]);
+                canvasPanel.addDrawCommand(new DrawCommand(x1, y1, x2, y2, Color.WHITE, thickness));
+            }
+        } catch (Exception e) {
+            System.out.println("DRAW_BCAST parse hatası: " + message);
+        }
+    }
+
     private void sendListRequest() {
         send(MupProtocol.LIST);
     }
 
-private void sendDrawLine(int fileId, int x1, int y1, int x2, int y2) {
-    String message;
-
-    if ("ERASE".equals(selectedTool)) {
-        message = MupProtocol.DRAW + " "
-                + fileId + " "
-                + "ERASE" + " "
-                + x1 + " "
-                + y1 + " "
-                + x2 + " "
-                + y2 + " "
-                + selectedThickness;
-    } else {
-        String colorHex = colorToHex(selectedColor);
-
-        message = MupProtocol.DRAW + " "
-                + fileId + " "
-                + "LINE" + " "
-                + x1 + " "
-                + y1 + " "
-                + x2 + " "
-                + y2 + " "
-                + colorHex + " "
-                + selectedThickness;
+    private void sendDrawLine(int fileId, int x1, int y1, int x2, int y2) {
+        String msg;
+        if ("ERASE".equals(selectedTool)) {
+            msg = MupProtocol.DRAW + " " + fileId + " ERASE "
+                    + x1 + " " + y1 + " " + x2 + " " + y2 + " " + selectedThickness;
+        } else {
+            msg = MupProtocol.DRAW + " " + fileId + " LINE "
+                    + x1 + " " + y1 + " " + x2 + " " + y2 + " "
+                    + colorToHex(selectedColor) + " " + selectedThickness;
+        }
+        send(msg);
     }
 
-    send(message);
-}
+    private String colorToHex(Color c) {
+        return String.format("%02X%02X%02X", c.getRed(), c.getGreen(), c.getBlue());
+    }
 
-    private String colorToHex(Color color) {
-        return String.format("%02X%02X%02X",
-                color.getRed(),
-                color.getGreen(),
-                color.getBlue()
-        );
+    // ----------------------------------------------------------------
+    // Bağlantı
+    // ----------------------------------------------------------------
+
+    private void askUsernameAndConnect() {
+        username = JOptionPane.showInputDialog(this, "Kullanıcı adınızı girin:",
+                "MUP Bağlantı", JOptionPane.PLAIN_MESSAGE);
+        if (username == null || username.trim().isEmpty()) {
+            JOptionPane.showMessageDialog(this, "Kullanıcı adı boş olamaz.");
+            System.exit(0);
+        }
+        username = username.trim();
+        try {
+            socket = new Socket(SERVER_HOST, SERVER_PORT);
+            reader = new BufferedReader(new InputStreamReader(socket.getInputStream(), "UTF-8"));
+            writer = new BufferedWriter(new OutputStreamWriter(socket.getOutputStream(), "UTF-8"));
+
+            send(MupProtocol.JOIN + " " + username);
+            String response = reader.readLine();
+
+            if (response == null) {
+                JOptionPane.showMessageDialog(this, "Server yanıt vermedi.");
+                System.exit(0);
+            }
+
+            if (response.startsWith(MupProtocol.WELCOME)) {
+                connectionLabel.setText("Bağlandı: " + username);
+                startListenerThread();
+                sendListRequest();
+            } else if (response.startsWith(MupProtocol.REJECT)) {
+                JOptionPane.showMessageDialog(this, "Bağlantı reddedildi: " + response);
+                System.exit(0);
+            } else {
+                JOptionPane.showMessageDialog(this, "Beklenmeyen yanıt: " + response);
+                System.exit(0);
+            }
+        } catch (IOException e) {
+            JOptionPane.showMessageDialog(this, "Server'a bağlanılamadı: " + e.getMessage());
+            System.exit(0);
+        }
+    }
+
+    private void startListenerThread() {
+        Thread t = new Thread(() -> {
+            try {
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    final String msg = line;
+                    SwingUtilities.invokeLater(() -> handleServerMessage(msg));
+                }
+            } catch (IOException e) {
+                SwingUtilities.invokeLater(() -> connectionLabel.setText("Bağlantı koptu"));
+            }
+        });
+        t.setDaemon(true);
+        t.start();
     }
 
     private synchronized void send(String message) {
         try {
             writer.write(message + MupProtocol.CRLF);
             writer.flush();
-            System.out.println("[CLIENT] " + message);
-
+            System.out.println("[CLIENT] " + message.substring(0, Math.min(120, message.length())));
         } catch (IOException e) {
             JOptionPane.showMessageDialog(this, "Mesaj gönderilemedi: " + e.getMessage());
         }
     }
 
+    // ----------------------------------------------------------------
     private static class FileItem {
-
         private final int id;
         private final String name;
 
-        public FileItem(int id, String name) {
+        FileItem(int id, String name) {
             this.id = id;
             this.name = name;
         }
 
-        public int getId() {
+        int getId() {
             return id;
         }
 

@@ -1,23 +1,67 @@
 package client;
 
 import java.awt.Color;
+import java.awt.image.BufferedImage;
 
 public class DrawCommand {
 
-    private final int x1;
-    private final int y1;
-    private final int x2;
-    private final int y2;
+    public enum Type {
+        LINE, ERASE, ERASE_RECT, PASTE_IMAGE
+    }
+
+    private final Type type;
+    private final int x1, y1, x2, y2;
     private final Color color;
     private final int thickness;
+    // ERASE_RECT için alan boyutları
+    private final int rectW, rectH;
+    // PASTE_IMAGE için
+    private final BufferedImage image;
 
+    // LINE / ERASE (orijinal constructor — geriye dönük uyumlu)
     public DrawCommand(int x1, int y1, int x2, int y2, Color color, int thickness) {
+        this.type = color.equals(Color.WHITE) ? Type.ERASE : Type.LINE;
         this.x1 = x1;
         this.y1 = y1;
         this.x2 = x2;
         this.y2 = y2;
         this.color = color;
         this.thickness = thickness;
+        this.rectW = 0;
+        this.rectH = 0;
+        this.image = null;
+    }
+
+    // LINE / ERASE (tip açık belirtilerek)
+    public DrawCommand(int x1, int y1, int x2, int y2, Color color, int thickness, int rectW, int rectH, Type type) {
+        this.type = type;
+        this.x1 = x1;
+        this.y1 = y1;
+        this.x2 = x2;
+        this.y2 = y2;
+        this.color = color;
+        this.thickness = thickness;
+        this.rectW = rectW;
+        this.rectH = rectH;
+        this.image = null;
+    }
+
+    // PASTE_IMAGE
+    public DrawCommand(int x, int y, BufferedImage image, Type type) {
+        this.type = type;
+        this.x1 = x;
+        this.y1 = y;
+        this.x2 = x;
+        this.y2 = y;
+        this.color = Color.BLACK;
+        this.thickness = 1;
+        this.rectW = image != null ? image.getWidth() : 0;
+        this.rectH = image != null ? image.getHeight() : 0;
+        this.image = image;
+    }
+
+    public Type getType() {
+        return type;
     }
 
     public int getX1() {
@@ -42,5 +86,17 @@ public class DrawCommand {
 
     public int getThickness() {
         return thickness;
+    }
+
+    public int getRectW() {
+        return rectW;
+    }
+
+    public int getRectH() {
+        return rectH;
+    }
+
+    public BufferedImage getImage() {
+        return image;
     }
 }

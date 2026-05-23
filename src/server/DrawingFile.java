@@ -15,6 +15,7 @@ public class DrawingFile {
     private final int height;
 
     private int nextOpId = 1;
+    private int dirtyCount = 0; // RFC MUST-14 (Otomatik Kayıt için)
 
     private final List<String> operations = new ArrayList<>();
     private final Set<ClientHandler> editors = new HashSet<>();
@@ -28,17 +29,41 @@ public class DrawingFile {
 
     public synchronized String createDrawBroadcast(String author, String tool, String args) {
         int opId = nextOpId++;
-
         String broadcastMessage = MupProtocol.DRAW_BCAST + " "
-                + id + " "
-                + opId + " "
-                + author + " "
-                + tool + " "
-                + args;
-
+                + id + " " + opId + " " + author + " " + tool + " " + args;
         operations.add(broadcastMessage);
-
+        dirtyCount++;
         return broadcastMessage;
+    }
+
+    // RFC 3.8.5 Formatı: REGION_BCAST <fileId> <opId> <author> CUT <x> <y> <w> <h>
+    public synchronized String createCutBroadcast(String author, int x, int y, int w, int h) {
+        int opId = nextOpId++;
+        String msg = MupProtocol.REGION_BCAST + " "
+                + id + " " + opId + " " + author + " CUT " + x + " " + y + " " + w + " " + h;
+        operations.add(msg);
+        dirtyCount++;
+        return msg;
+    }
+
+    // RFC 3.8.5 Formatı: REGION_BCAST <fileId> <opId> <author> PASTE <x> <y> <w>
+    // <h> <hex1> ... <hexN>
+    public synchronized String createPasteBroadcast(String author, int x, int y, int w, int h, String pixelData) {
+        int opId = nextOpId++;
+        String msg = MupProtocol.REGION_BCAST + " "
+                + id + " " + opId + " " + author + " PASTE " + x + " " + y + " " + w + " " + h + " " + pixelData;
+        operations.add(msg);
+        dirtyCount++;
+        return msg;
+    }
+
+    // 5 çizimde bir kaydeder (RFC MUST-14)
+    public synchronized boolean checkAndResetAutoSave() {
+        if (dirtyCount >= 5) {
+            dirtyCount = 0;
+            return true;
+        }
+        return false;
     }
 
     public synchronized List<String> getOperationsCopy() {
@@ -57,27 +82,11 @@ public class DrawingFile {
         return new HashSet<>(editors);
     }
 
-    public synchronized int getEditorCount() {
-        return editors.size();
-    }
-
-    public synchronized int getOperationCount() {
-        return operations.size();
-    }
-
     public int getId() {
         return id;
     }
 
     public String getName() {
         return name;
-    }
-
-    public int getWidth() {
-        return width;
-    }
-
-    public int getHeight() {
-        return height;
     }
 }
