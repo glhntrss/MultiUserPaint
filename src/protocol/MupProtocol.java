@@ -24,14 +24,11 @@ public class MupProtocol {
     public static final String DRAW = "DRAW";
     public static final String DRAW_BCAST = "DRAW_BCAST";
 
-    // Kes-Yapıştır (Copy yereldir, mesajı yoktur)
     public static final String CUT = "CUT";
     public static final String PASTE = "PASTE";
 
-    // RFC Madde 3.8.5: Ortak Bölge Yayını
     public static final String REGION_BCAST = "REGION_BCAST";
 
-    // Bildirimler & Otomatik Kayıt
     public static final String USER_JOINED_FILE = "USER_JOINED_FILE";
     public static final String USER_LEFT_FILE = "USER_LEFT_FILE";
     public static final String SAVE_ACK = "SAVE_ACK";

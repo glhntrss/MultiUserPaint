@@ -2,10 +2,6 @@ package client;
 
 import java.awt.image.BufferedImage;
 
-/**
- * İstemci tarafında CUT veya COPY ile kopyalanan
- * tuval bölgesini tutar.
- */
 public class ClipboardData {
 
     public enum Operation {
@@ -13,7 +9,7 @@ public class ClipboardData {
     }
 
     private final Operation operation;
-    private final BufferedImage image; // kopyalanan piksel verisi
+    private final BufferedImage image;
     private final int srcX;
     private final int srcY;
     private final int width;

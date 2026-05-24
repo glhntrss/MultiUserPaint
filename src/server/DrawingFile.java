@@ -15,7 +15,7 @@ public class DrawingFile {
     private final int height;
 
     private int nextOpId = 1;
-    private int dirtyCount = 0; // RFC MUST-14 (Otomatik Kayıt için)
+    private int dirtyCount = 0;
 
     private final List<String> operations = new ArrayList<>();
     private final Set<ClientHandler> editors = new HashSet<>();
@@ -36,7 +36,6 @@ public class DrawingFile {
         return broadcastMessage;
     }
 
-    // RFC 3.8.5 Formatı: REGION_BCAST <fileId> <opId> <author> CUT <x> <y> <w> <h>
     public synchronized String createCutBroadcast(String author, int x, int y, int w, int h) {
         int opId = nextOpId++;
         String msg = MupProtocol.REGION_BCAST + " "
@@ -46,8 +45,6 @@ public class DrawingFile {
         return msg;
     }
 
-    // RFC 3.8.5 Formatı: REGION_BCAST <fileId> <opId> <author> PASTE <x> <y> <w>
-    // <h> <hex1> ... <hexN>
     public synchronized String createPasteBroadcast(String author, int x, int y, int w, int h, String pixelData) {
         int opId = nextOpId++;
         String msg = MupProtocol.REGION_BCAST + " "
@@ -57,7 +54,6 @@ public class DrawingFile {
         return msg;
     }
 
-    // 5 çizimde bir kaydeder (RFC MUST-14)
     public synchronized boolean checkAndResetAutoSave() {
         if (dirtyCount >= 5) {
             dirtyCount = 0;

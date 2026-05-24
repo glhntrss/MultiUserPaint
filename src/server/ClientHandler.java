@@ -295,7 +295,6 @@ public class ClientHandler implements Runnable {
 
         openFileIds.add(fileId);
 
-        // RFC 3.7.3: Diğer kullanıcılara bildir (MUST)
         broadcastToFileEditors(selectedFile, MupProtocol.USER_JOINED_FILE + " " + fileId + " " + username);
         selectedFile.addEditor(this);
 
@@ -325,7 +324,6 @@ public class ClientHandler implements Runnable {
         DrawingFile file = findFileById(fileId);
         if (file != null) {
             file.removeEditor(this);
-            // RFC 3.7.4: Diğer kullanıcılara ayrıldığını bildir
             broadcastToFileEditors(file, MupProtocol.USER_LEFT_FILE + " " + fileId + " " + username);
         }
         openFileIds.remove(fileId);
@@ -377,11 +375,6 @@ public class ClientHandler implements Runnable {
         checkAutoSave(selectedFile);
     }
 
-    // ----------------------------------------------------------------
-    // CUT
-    // CUT <fileId> <x> <y> <w> <h>
-    // ----------------------------------------------------------------
-
     private void handleCut(String line) throws IOException {
         String[] parts = line.split(" ");
         if (parts.length != 6) {
@@ -416,14 +409,7 @@ public class ClientHandler implements Runnable {
         checkAutoSave(file); // Auto-save kontrolü
     }
 
-    // ----------------------------------------------------------------
-    // PASTE
-    // PASTE <fileId> <x> <y> <w> <h> <pixels>
-    // pixels = virgülle ayrılmış w*h adet HEX6 değeri
-    // ----------------------------------------------------------------
-
     private void handlePaste(String line) throws IOException {
-        // PASTE <fileId> <x> <y> <w> <h> <pxCount> <hex1> ... <hexN>
         String[] parts = line.split(" ", 8);
         if (parts.length != 8) {
             sendMessage(MupProtocol.ERR + " 201 PASTE formatı hatalı");
@@ -453,7 +439,6 @@ public class ClientHandler implements Runnable {
             return;
         }
 
-        // MUST-21 Kuralı
         if (pxCount != w * h) {
             sendMessage(MupProtocol.ERR + " 201 PASTE pxCount w*h değerine eşit olmalıdır");
             return;
@@ -465,7 +450,6 @@ public class ClientHandler implements Runnable {
         checkAutoSave(file); // Auto-save kontrolü
     }
 
-    // RFC MUST-14 Otomatik kayıt tetikleyici
     private void checkAutoSave(DrawingFile file) {
         if (file.checkAndResetAutoSave()) {
             long timestamp = System.currentTimeMillis() / 1000;
@@ -521,10 +505,8 @@ public class ClientHandler implements Runnable {
     private void removeFromOpenFiles() {
         synchronized (SHARED_FILES) {
             for (DrawingFile file : SHARED_FILES) {
-                // Eğer bu kullanıcı dosyanın içindeyse, onu sil ve diğerlerine haber ver
                 if (file.getEditorsCopy().contains(this)) {
                     file.removeEditor(this);
-                    // MUST-20 Kuralı: Bağlantı kopsa bile kalanlara bildirim gitmeli
                     if (username != null) {
                         broadcastToFileEditors(file, MupProtocol.USER_LEFT_FILE + " " + file.getId() + " " + username);
                     }

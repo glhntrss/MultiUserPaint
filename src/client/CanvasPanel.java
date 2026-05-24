@@ -14,12 +14,9 @@ public class CanvasPanel extends JPanel {
 
     private final List<DrawCommand> commands = new ArrayList<>();
 
-    // Seçim dikdörtgeni (SELECT aracı aktifken gösterilir)
     private Rectangle selectionRect = null;
-    // Seçim başlangıç noktası (mouse sürüklerken hesaplama için)
     private int selStartX, selStartY;
 
-    // PASTE önizlemesi: paste konumu sürüklenirken gösterilir
     private BufferedImage pastePreview = null;
     private int pastePreviewX = 0;
     private int pastePreviewY = 0;
@@ -27,10 +24,6 @@ public class CanvasPanel extends JPanel {
     public CanvasPanel() {
         setBackground(Color.WHITE);
     }
-
-    // ----------------------------------------------------------------
-    // Çizim komutları
-    // ----------------------------------------------------------------
 
     public synchronized void addDrawCommand(DrawCommand command) {
         commands.add(command);
@@ -43,10 +36,6 @@ public class CanvasPanel extends JPanel {
         pastePreview = null;
         repaint();
     }
-
-    // ----------------------------------------------------------------
-    // Seçim dikdörtgeni
-    // ----------------------------------------------------------------
 
     public synchronized void startSelection(int x, int y) {
         selStartX = x;
@@ -72,21 +61,11 @@ public class CanvasPanel extends JPanel {
         repaint();
     }
 
-    /** Mevcut seçim dikdörtgenini döndürür. null ise seçim yok. */
     public synchronized Rectangle getSelectionRect() {
         return selectionRect == null ? null : new Rectangle(selectionRect);
     }
 
-    // ----------------------------------------------------------------
-    // Tuval içeriğini BufferedImage olarak al (CUT/COPY için)
-    // ----------------------------------------------------------------
-
-    /**
-     * Tüm çizim komutlarını geçici bir BufferedImage'e çizer ve
-     * istenen bölgeyi keserek döndürür.
-     */
     public synchronized BufferedImage captureRegion(int x, int y, int w, int h) {
-        // Tüm tuvali çiz
         BufferedImage full = new BufferedImage(
                 Math.max(getWidth(), 1),
                 Math.max(getHeight(), 1),
@@ -97,7 +76,6 @@ public class CanvasPanel extends JPanel {
         drawCommandsOnGraphics(g2d);
         g2d.dispose();
 
-        // Sınır kontrolü
         int cx = Math.max(0, x);
         int cy = Math.max(0, y);
         int cw = Math.min(w, full.getWidth() - cx);
@@ -109,19 +87,10 @@ public class CanvasPanel extends JPanel {
         return full.getSubimage(cx, cy, cw, ch);
     }
 
-    /**
-     * CUT sonrası kesilen bölgeyi beyaza boyar (yerel önizleme).
-     * Sunucu onayı (CUT_BCAST) gelince zaten tüm komutlar temizlenir;
-     * bu metod anlık görsel geri bildirim içindir.
-     */
     public synchronized void eraseRegion(int x, int y, int w, int h) {
         commands.add(new DrawCommand(x, y, x + w, y + h, Color.WHITE, 1, w, h, DrawCommand.Type.ERASE_RECT));
         repaint();
     }
-
-    // ----------------------------------------------------------------
-    // Paste önizlemesi
-    // ----------------------------------------------------------------
 
     public synchronized void showPastePreview(BufferedImage img, int x, int y) {
         pastePreview = img;
@@ -153,19 +122,11 @@ public class CanvasPanel extends JPanel {
         return pastePreviewY;
     }
 
-    // ----------------------------------------------------------------
-    // PASTE_BCAST geldiğinde: piksel verisiyle DrawCommand ekle
-    // ----------------------------------------------------------------
-
     public synchronized void applyPaste(BufferedImage img, int x, int y) {
         commands.add(new DrawCommand(x, y, img, DrawCommand.Type.PASTE_IMAGE));
         pastePreview = null;
         repaint();
     }
-
-    // ----------------------------------------------------------------
-    // Paintcomponent
-    // ----------------------------------------------------------------
 
     @Override
     protected synchronized void paintComponent(Graphics g) {
@@ -173,7 +134,6 @@ public class CanvasPanel extends JPanel {
         Graphics2D g2d = (Graphics2D) g;
         drawCommandsOnGraphics(g2d);
 
-        // Paste önizlemesi (yarı saydam)
         if (pastePreview != null) {
             g2d.setComposite(java.awt.AlphaComposite.getInstance(
                     java.awt.AlphaComposite.SRC_OVER, 0.7f));
@@ -182,14 +142,12 @@ public class CanvasPanel extends JPanel {
                     java.awt.AlphaComposite.SRC_OVER, 1.0f));
         }
 
-        // Seçim kutusu (kesik çizgi)
         if (selectionRect != null && selectionRect.width > 0 && selectionRect.height > 0) {
             g2d.setColor(new Color(0, 120, 215));
             g2d.setStroke(new BasicStroke(1.5f, BasicStroke.CAP_BUTT, BasicStroke.JOIN_MITER,
                     10, new float[] { 6, 4 }, 0));
             g2d.draw(selectionRect);
 
-            // Seçim içini açık mavi yap
             g2d.setColor(new Color(0, 120, 215, 30));
             g2d.fill(selectionRect);
         }

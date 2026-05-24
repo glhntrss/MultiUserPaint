@@ -13,12 +13,9 @@ public class DrawCommand {
     private final int x1, y1, x2, y2;
     private final Color color;
     private final int thickness;
-    // ERASE_RECT için alan boyutları
     private final int rectW, rectH;
-    // PASTE_IMAGE için
     private final BufferedImage image;
 
-    // LINE / ERASE (orijinal constructor — geriye dönük uyumlu)
     public DrawCommand(int x1, int y1, int x2, int y2, Color color, int thickness) {
         this.type = color.equals(Color.WHITE) ? Type.ERASE : Type.LINE;
         this.x1 = x1;
@@ -32,7 +29,6 @@ public class DrawCommand {
         this.image = null;
     }
 
-    // LINE / ERASE (tip açık belirtilerek)
     public DrawCommand(int x1, int y1, int x2, int y2, Color color, int thickness, int rectW, int rectH, Type type) {
         this.type = type;
         this.x1 = x1;
@@ -46,7 +42,6 @@ public class DrawCommand {
         this.image = null;
     }
 
-    // PASTE_IMAGE
     public DrawCommand(int x, int y, BufferedImage image, Type type) {
         this.type = type;
         this.x1 = x;

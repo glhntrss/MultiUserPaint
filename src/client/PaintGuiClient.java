@@ -31,14 +31,12 @@ public class PaintGuiClient extends JFrame {
 
     private Color selectedColor = Color.BLACK;
     private int selectedThickness = 3;
-    private String selectedTool = "LINE"; // LINE | ERASE | SELECT
+    private String selectedTool = "LINE";
 
     private Point lastPoint = null;
 
-    // Pano: CUT veya COPY ile alınan görüntü
     private ClipboardData clipboard = null;
 
-    // ----------------------------------------------------------------
     public static void main(String[] args) {
         SwingUtilities.invokeLater(() -> new PaintGuiClient().setVisible(true));
     }
@@ -51,10 +49,6 @@ public class PaintGuiClient extends JFrame {
         buildInterface();
         askUsernameAndConnect();
     }
-
-    // ----------------------------------------------------------------
-    // Arayüz kurulumu
-    // ----------------------------------------------------------------
 
     private void buildInterface() {
         setLayout(new BorderLayout());
@@ -98,17 +92,14 @@ public class PaintGuiClient extends JFrame {
         topPanel.add(activeFileLabel);
         add(topPanel, BorderLayout.NORTH);
 
-        // --- Sol panel: dosya listesi ---
         JPanel leftPanel = new JPanel(new BorderLayout());
         leftPanel.setPreferredSize(new Dimension(220, 0));
         leftPanel.add(new JLabel("Paylaşılan Dosyalar"), BorderLayout.NORTH);
         leftPanel.add(new JScrollPane(fileList), BorderLayout.CENTER);
         add(leftPanel, BorderLayout.WEST);
 
-        // --- Merkez: tuval ---
         add(canvasPanel, BorderLayout.CENTER);
 
-        // --- Alt bilgi ---
         JTextArea infoArea = new JTextArea();
         infoArea.setEditable(false);
         infoArea.setRows(3);
@@ -118,7 +109,6 @@ public class PaintGuiClient extends JFrame {
                         "Yapıştır: Kopyaladıktan sonra Yapıştır'a bas, tuvalde tıklayarak konumlandır");
         add(new JScrollPane(infoArea), BorderLayout.SOUTH);
 
-        // --- Buton olayları ---
         listButton.addActionListener(e -> sendListRequest());
         createButton.addActionListener(e -> createFile());
         openButton.addActionListener(e -> openSelectedFile());
@@ -139,7 +129,6 @@ public class PaintGuiClient extends JFrame {
             else
                 selectedTool = "LINE";
 
-            // Seçim aracı dışına geçince seçimi temizle
             if (!"SELECT".equals(selectedTool))
                 canvasPanel.clearSelection();
         });
@@ -152,7 +141,6 @@ public class PaintGuiClient extends JFrame {
         copyButton.addActionListener(e -> handleCopy());
         pasteButton.addActionListener(e -> handlePaste());
 
-        // Klavye kısayolları
         getRootPane().getInputMap(JComponent.WHEN_IN_FOCUSED_WINDOW)
                 .put(KeyStroke.getKeyStroke("ctrl X"), "cut");
         getRootPane().getInputMap(JComponent.WHEN_IN_FOCUSED_WINDOW)
@@ -175,7 +163,6 @@ public class PaintGuiClient extends JFrame {
             }
         });
 
-        // --- Tuval fare olayları ---
         canvasPanel.addMouseListener(new MouseAdapter() {
             @Override
             public void mousePressed(MouseEvent e) {
@@ -235,10 +222,6 @@ public class PaintGuiClient extends JFrame {
         });
     }
 
-    // ----------------------------------------------------------------
-    // Kes-Kopyala-Yapıştır işlemleri
-    // ----------------------------------------------------------------
-
     private void handleCut() {
         if (activeFileId == null) {
             JOptionPane.showMessageDialog(this, "Önce bir dosya aç.");
@@ -250,7 +233,6 @@ public class PaintGuiClient extends JFrame {
             return;
         }
 
-        // Görüntüyü yerel olarak al
         BufferedImage captured = canvasPanel.captureRegion(sel.x, sel.y, sel.width, sel.height);
         if (captured == null)
             return;
@@ -258,7 +240,6 @@ public class PaintGuiClient extends JFrame {
         clipboard = new ClipboardData(ClipboardData.Operation.CUT,
                 captured, sel.x, sel.y, sel.width, sel.height);
 
-        // Sunucuya CUT bildir: CUT <fileId> <x> <y> <w> <h>
         send(MupProtocol.CUT + " " + activeFileId
                 + " " + sel.x + " " + sel.y
                 + " " + sel.width + " " + sel.height);
@@ -276,7 +257,6 @@ public class PaintGuiClient extends JFrame {
 
         clipboard = new ClipboardData(ClipboardData.Operation.COPY, captured, sel.x, sel.y, sel.width, sel.height);
 
-        // DİKKAT: RFC'ye göre COPY sadece yereldir. Sunucuya bir şey GÖNDERİLMEZ.
         canvasPanel.clearSelection();
         JOptionPane.showMessageDialog(this, "Kopyalandı (" + sel.width + "x" + sel.height
                 + " px).\n'Yapıştır' butonuna bas, ardından tuvalde konumlandır.");
@@ -292,14 +272,11 @@ public class PaintGuiClient extends JFrame {
             return;
         }
 
-        // Seçim aracına geç ve paste önizlemesini göster
         selectedTool = "SELECT";
         canvasPanel.showPastePreview(clipboard.getImage(), 0, 0);
         JOptionPane.showMessageDialog(this, "Tuvale tıklayarak yapıştır konumunu seç.");
     }
 
-    // RFC MUST-22: 4096 Bayt sınırına takılmamak için PASTE işlemini satır satır
-    // bölüyoruz.
     private void confirmPaste(int x, int y) {
         if (clipboard == null || activeFileId == null)
             return;
@@ -307,8 +284,7 @@ public class PaintGuiClient extends JFrame {
         int w = img.getWidth();
         int h = img.getHeight();
 
-        // Her piksel için 6 karakter (HEX6) + 1 boşluk = 7 karakter
-        // Güvenli bölge olarak her mesajda en fazla 400 piksel gönderiyoruz.
+
         int maxPxPerMessage = 400;
 
         for (int py = 0; py < h; py++) {
@@ -320,20 +296,15 @@ public class PaintGuiClient extends JFrame {
                     int rgb = img.getRGB(px + i, py) & 0xFFFFFF;
                     pixels.append(String.format("%06X", rgb));
                     if (i < chunkW - 1)
-                        pixels.append(" "); // RFC MUST-3'e göre boşlukla ayrılır
+                        pixels.append(" ");
                 }
 
-                // Format: PASTE <fileId> <x> <y> <w> <h> <pxCount> <hex1> ... <hexN>
                 send(MupProtocol.PASTE + " " + activeFileId + " " + (x + px) + " " + (y + py)
                         + " " + chunkW + " 1 " + chunkW + " " + pixels.toString());
             }
         }
         canvasPanel.clearPastePreview();
     }
-
-    // ----------------------------------------------------------------
-    // Sunucu mesajlarını işle
-    // ----------------------------------------------------------------
 
     private void handleServerMessage(String message) {
         System.out.println("[SERVER] " + message);
@@ -376,70 +347,6 @@ public class PaintGuiClient extends JFrame {
             JOptionPane.showMessageDialog(this, "Server hatası: " + message);
         }
     }
-
-    // ----------------------------------------------------------------
-    // CKY broadcast işleyicileri
-    // ----------------------------------------------------------------
-
-    // /**
-    //  * CUT_BCAST <fileId> <opId> <author> <x> <y> <w> <h>
-    //  * Kesilen bölgeyi tüm editörlerin ekranında beyaz ile doldurur.
-    //  */
-    // private void handleCutBroadcast(String message) {
-    //     String[] p = message.split(" ");
-    //     if (p.length < 8)
-    //         return;
-    //     try {
-    //         int x = Integer.parseInt(p[4]);
-    //         int y = Integer.parseInt(p[5]);
-    //         int w = Integer.parseInt(p[6]);
-    //         int h = Integer.parseInt(p[7]);
-    //         canvasPanel.eraseRegion(x, y, w, h);
-    //     } catch (NumberFormatException e) {
-    //         System.out.println("CUT_BCAST parse hatası: " + message);
-    //     }
-    // }
-
-    // /**
-    //  * PASTE_BCAST <fileId> <opId> <author> <x> <y> <w> <h> <pixels>
-    //  * pixels = virgülle ayrılmış HEX6 değerlerinin listesi (w*h adet)
-    //  */
-    // private void handlePasteBroadcast(String message) {
-    //     // Son alan (pixels) boşluk içerebilir; 8. alandan itibari hepsini al
-    //     String[] p = message.split(" ", 9);
-    //     if (p.length < 9)
-    //         return;
-    //     try {
-    //         int x = Integer.parseInt(p[4]);
-    //         int y = Integer.parseInt(p[5]);
-    //         int w = Integer.parseInt(p[6]);
-    //         int h = Integer.parseInt(p[7]);
-    //         String pixelData = p[8];
-
-    //         String[] hexValues = pixelData.split(",");
-    //         if (hexValues.length != w * h) {
-    //             System.out.println("PASTE_BCAST piksel sayısı uyumsuz.");
-    //             return;
-    //         }
-
-    //         BufferedImage img = new BufferedImage(w, h, BufferedImage.TYPE_INT_ARGB);
-    //         for (int py = 0; py < h; py++) {
-    //             for (int px = 0; px < w; px++) {
-    //                 int rgb = (int) Long.parseLong(hexValues[py * w + px], 16);
-    //                 img.setRGB(px, py, 0xFF000000 | rgb);
-    //             }
-    //         }
-
-    //         canvasPanel.applyPaste(img, x, y);
-
-    //     } catch (Exception e) {
-    //         System.out.println("PASTE_BCAST parse hatası: " + e.getMessage());
-    //     }
-    // }
-
-    // ----------------------------------------------------------------
-    // Diğer server mesaj işleyicileri (orijinalden korundu)
-    // ----------------------------------------------------------------
 
     private void updateFileList(String message) {
         fileListModel.clear();
@@ -514,14 +421,12 @@ public class PaintGuiClient extends JFrame {
         }
     }
 
-    // RFC Madde 3.8.5'e tam uyumlu REGION_BCAST ayrıştırıcısı
     private void handleRegionBroadcast(String message) {
-        // Hata buradaydı: split limitini 9'dan 10'a çıkardık
         String[] p = message.split(" ", 10);
         if (p.length < 8) return;
         
         try {
-            String subCmd = p[4]; // CUT veya PASTE
+            String subCmd = p[4];
             int x = Integer.parseInt(p[5]);
             int y = Integer.parseInt(p[6]);
             int w = Integer.parseInt(p[7]);
@@ -530,15 +435,14 @@ public class PaintGuiClient extends JFrame {
             if ("CUT".equals(subCmd)) {
                 canvasPanel.eraseRegion(x, y, w, h);
             } else if ("PASTE".equals(subCmd)) {
-                if (p.length < 10) return; // Pixel verisi eksikse dön
+                if (p.length < 10) return;
                 
-                String pixelData = p[9]; // Pikseller artık tam olarak 9. index'te
+                String pixelData = p[9];
                 String[] hexValues = pixelData.split(" ");
                 
                 BufferedImage img = new BufferedImage(w, h, BufferedImage.TYPE_INT_ARGB);
                 for (int py = 0; py < h; py++) {
                     for (int px = 0; px < w; px++) {
-                        // Olası bir parse hatasını engellemek için sınır kontrolü
                         if (py * w + px >= hexValues.length) break; 
                         
                         int rgb = (int) Long.parseLong(hexValues[py * w + px], 16);
@@ -602,10 +506,6 @@ public class PaintGuiClient extends JFrame {
     private String colorToHex(Color c) {
         return String.format("%02X%02X%02X", c.getRed(), c.getGreen(), c.getBlue());
     }
-
-    // ----------------------------------------------------------------
-    // Bağlantı
-    // ----------------------------------------------------------------
 
     private void askUsernameAndConnect() {
         username = JOptionPane.showInputDialog(this, "Kullanıcı adınızı girin:",
